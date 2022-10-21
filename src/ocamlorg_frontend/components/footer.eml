@@ -97,7 +97,7 @@ let render () =
               </li>
 
               <li>
-                <a href="<%s Url.governance %>" class="text-base leading-6 text-gray-600">Governance</a>
+                <a href="<%s Url.governance_policy %>" class="text-base leading-6 text-gray-600">Governance</a>
               </li>
 
               <li>

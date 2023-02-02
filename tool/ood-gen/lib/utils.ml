@@ -54,7 +54,7 @@ let slugify value =
 
 let yaml_sequence_file of_yaml file =
   let ( >>= ) = Result.bind in
-  let ( <@> ) = Import.Result.apply in
+  let ( <@> ) = Result.apply in
   let key = Filename.remove_extension file in
   Data.read file
   |> Option.to_result ~none:(`Msg "file not found")
@@ -63,4 +63,4 @@ let yaml_sequence_file of_yaml file =
   >>= (function `A u -> Ok u | _ -> Error (`Msg "expecting a sequence"))
   >>= List.fold_left (fun u x -> Ok List.cons <@> of_yaml x <@> u) (Ok [])
   |> Result.map_error (function `Msg err -> file ^ ": " ^ err)
-  |> Import.Result.get_ok ~error:(fun msg -> Exn.Decode_error msg)
+  |> Result.get_ok ~error:(fun msg -> Exn.Decode_error msg)

@@ -275,78 +275,22 @@ module Documentation = struct
           content = preamble ^ content;
         }
     | _ -> raise (Invalid_argument "malformed .html.json file")
-
-  (* FIXME: remove when fallback is unnecessary *)
-  let old_toc_from_string s =
-    match Yojson.Safe.from_string s with
-    | `List xs -> List.map toc_of_json xs
-    | _ -> raise (Invalid_argument "the toplevel json is not a list")
-
-  (* FIXME: remove when fallback is unnecessary *)
-  let old_breadcrumbs s =
-    let parse_item i =
-      match String.split_on_char '-' i with
-      | [ "index.html" ] | [ "" ] -> None
-      | [ module_name ] ->
-          Some { kind = Module; name = module_name; href = "#" }
-      | [ "module"; "type"; module_name ] ->
-          Some { kind = ModuleType; name = module_name; href = "#" }
-      | [ "argument"; arg_number; arg_name ] -> (
-          try
-            Some
-              {
-                kind = Parameter (int_of_string arg_number);
-                name = arg_name;
-                href = "#";
-              }
-          with Failure _ -> None)
-      | [ "class"; class_name ] ->
-          Some { kind = Class; name = class_name; href = "#" }
-      | [ "class"; "type"; class_name ] ->
-          Some { kind = ClassType; name = class_name; href = "#" }
-      | _ -> None
-    in
-    String.split_on_char '/' s |> List.filter_map parse_item
-
-  (* FIXME: remove when fallback is unnecessary *)
-  let old_doc ~path ~module_map ~toc_content content =
-    let toc =
-      if toc_content != "" then (
-        try old_toc_from_string toc_content
-        with Yojson.Json_error err ->
-          Logs.err (fun m -> m "Invalid toc: %s" err);
-          [])
-      else []
-    in
-    {
-      old = true;
-      module_map;
-      uses_katex = false;
-      toc;
-      breadcrumbs = old_breadcrumbs path;
-      content;
-    }
 end
 
 module Module_map = Module_map
 
-(* FIXME: remove when fallback is no longer necessary *)
 let package_url ~kind name version =
   match kind with
   | `Package ->
       "https://docs-data.ocaml.org/current/" ^ "p/" ^ name ^ "/" ^ version ^ "/"
-      (* "http://127.0.0.1:8000/" ^ "p/" ^ name ^ "/" ^ version ^ "/" *)
   | `Universe s ->
-      "https://docs-data.ocaml.org/current/" ^ "u/" ^ s ^ "/" ^ name ^ "/"
-      ^ version ^ "/"
-(* "http://127.0.0.1:8000/" ^ "u/" ^ s ^ "/" ^ name ^ "/" ^ version ^ "/" *)
-
-(* FIXME: rename to package_path when fallback is no longer necessary *)
-let old_package_url ~kind name version =
+      "https://docs-data.ocaml.org/current/" ^ "u/" ^ s ^ "/" ^ name ^ "/" ^ version ^ "/"
+(* CHANGE TO THIS AFTER PROMOTING docs data to live
   match kind with
   | `Package -> Config.documentation_url ^ "p/" ^ name ^ "/" ^ version ^ "/"
   | `Universe s ->
       Config.documentation_url ^ "u/" ^ s ^ "/" ^ name ^ "/" ^ version ^ "/"
+*)
 
 let http_get url =
   let open Lwt.Syntax in
@@ -381,31 +325,6 @@ let fetch_module_map_from_url ~package_url =
       Logs.info (fun m -> m "Failed to fetch module map at %s" url);
       { Module_map.libraries = Module_map.String_map.empty }
 
-(* FIXME: remove fallback when it's no longer needed *)
-let old_documentation_page ~kind t path =
-  let open Lwt.Syntax in
-  let old_package_url =
-    old_package_url ~kind (Name.to_string t.name) (Version.to_string t.version)
-  in
-  let url = old_package_url ^ "doc/" ^ path in
-  let* content = http_get url in
-  match content with
-  | Ok content ->
-      let toc_url = Filename.remove_extension url ^ ".toc.json" in
-      let* toc_content =
-        let+ toc_response = http_get toc_url in
-        match toc_response with Ok toc_content -> toc_content | Error _ -> ""
-      in
-      let* module_map =
-        fetch_module_map_from_url ~package_url:old_package_url
-      in
-      Logs.info (fun m -> m "Found OLD documentation page at %s" url);
-      Lwt.return
-        (Some (Documentation.old_doc ~path ~module_map ~toc_content content))
-  | Error _ ->
-      Logs.info (fun m -> m "Failed to fetch OLD documentation page at %s" url);
-      Lwt.return None
-
 let documentation_page ~kind t path =
   let open Lwt.Syntax in
   let package_url =
@@ -416,19 +335,19 @@ let documentation_page ~kind t path =
   match content with
   | Ok content ->
       let* module_map = fetch_module_map_from_url ~package_url in
-      let* maybe_doc =
+      let maybe_doc =
         try
-          Lwt.return (Some (Documentation.doc_from_string ~module_map content))
+          let doc = Documentation.doc_from_string ~module_map content in
+          Logs.info (fun m -> m "Found documentation page for %s" url);
+          Some (doc)
         with Invalid_argument err ->
           Logs.err (fun m -> m "Invalid documentation page: %s" err);
-          let+ maybe_old_doc = old_documentation_page ~kind t path in
-          maybe_old_doc
+          None
       in
-      Logs.info (fun m -> m "Found documentation page for %s" url);
       Lwt.return maybe_doc
   | Error _ ->
       Logs.info (fun m -> m "Failed to fetch new documentation page for %s" url);
-      old_documentation_page ~kind t path
+      Lwt.return None
 
 let maybe_file ~kind t filename =
   let open Lwt.Syntax in
@@ -461,18 +380,6 @@ let changes_filename ~kind t =
 
 type documentation_status = Success | Failure | Unknown
 
-let old_documentation_status ~kind t =
-  let open Lwt.Syntax in
-  let old_package_url =
-    old_package_url ~kind (Name.to_string t.name) (Version.to_string t.version)
-  in
-  let url = old_package_url ^ "status.json" in
-  let+ content = http_get url in
-  match content with
-  | Ok "\"Built\"" -> Success
-  | Ok "\"Failed\"" -> Failure
-  | _ -> Unknown
-
 let documentation_status ~kind t : documentation_status Lwt.t =
   let open Lwt.Syntax in
   let package_url =
@@ -486,10 +393,7 @@ let documentation_status ~kind t : documentation_status Lwt.t =
     | Ok "\"Failed\"" -> Failure
     | _ -> Unknown
   in
-  if status <> Success then
-    let* s = old_documentation_status ~kind t in
-    Lwt.return s
-  else Lwt.return status
+  Lwt.return status
 
 let doc_exists t name version =
   let package = get_package t name version in
